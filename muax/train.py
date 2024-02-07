@@ -172,7 +172,7 @@ def fit(model,
     if len(trajectory) >= k_steps:
       buffer.add(trajectory, trajectory.batched_transitions.w.mean())
   
-  print('start training...')
+  print('start training...(E0)')
   env = TrainMonitor(env, tensorboard_dir=os.path.join(tensorboard_dir, name), log_all_metrics=log_all_metrics)
   
   for ep in range(max_episodes):
