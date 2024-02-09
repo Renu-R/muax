@@ -40,11 +40,12 @@ class Trajectory:
     r"""
     A simple trajectory to hold episodical transitions.
     """
-    def __init__(self, transition_class=Transition):
+    def __init__(self, training_step: int, transition_class=Transition):
       self.trajectory = sliceable_deque([])
       self._transition_weight = sliceable_deque([])
       self.transition_class = transition_class
       self._batched_transitions = None
+      self.training_step = training_step
     
     def add(self, transition):
       """Adds a transition to the trajectory
@@ -69,8 +70,16 @@ class Trajectory:
           for _attr in batched_transitions))
       self._batched_transitions = batched_transitions
 
+    def get_max_idx(self, k_steps: int, current_training_step: int, max_training_steps: int, tau: float = 0.3): 
+       delta_td = (current_training_step - self.training_step)// (tau*max_training_steps)
+       max_idx = k_steps - delta_td
+       return int(np.clip(max_idx, 1, k_steps))
     
-    def sample(self, num_samples: int = 1, k_steps: int = 5):
+    def sample(self, current_training_step: int, 
+               max_training_steps: int,
+               num_samples: int = 1,
+               k_steps: int = 5, 
+               tau: float = 0.3):
       """Samples consecutive transitions of k steps from the trajectory.
       
       Parameters
@@ -88,7 +97,11 @@ class Trajectory:
           L is the length(k) of the consecutive transitions.
       """
       if len(self) <= k_steps: return []
-      max_idx = len(self) - k_steps
+      traj_depth = self.get_max_idx(k_steps=k_steps,
+                                 current_training_step=current_training_step,
+                                 max_training_steps=max_training_steps,
+                                 tau=tau)
+      max_idx = len(self) - traj_depth
       idxes = random.choices(range(max_idx), 
                             weights=self._transition_weight[:max_idx], 
                             k=num_samples)
@@ -96,7 +109,7 @@ class Trajectory:
       if self.batched_transitions is None:
         self.finalize()
 
-      samples = [self._get_sample(idx, k_steps) for idx in idxes]
+      samples = [self._get_sample(idx, traj_depth) for idx in idxes]
       
       return samples
 
@@ -104,8 +117,9 @@ class Trajectory:
     def batched_transitions(self):
       return self._batched_transitions
 
-    def _get_sample(self, idx, k_steps):
-      end_idx = idx + k_steps 
+    def _get_sample(self, idx, traj_depth):
+      #need to use current step number relative to total steps
+      end_idx = idx + traj_depth 
       sample = self.batched_transitions[:, idx: end_idx]
       return sample
 
@@ -189,11 +203,14 @@ class TrajectoryReplayBuffer(BaseReplayBuffer):
         self._storage.append(trajectory)
         self._trajectory_weight.append(w)
 
-    def sample(self, 
+    def sample(self,
+               current_training_step: int,
                batch_size=32, 
                num_trajectory: int = None,
                k_steps: int = 5,
-               sample_per_trajectory: int = 1):
+               sample_per_trajectory: int = 1,
+               max_training_steps: int = 10000,
+               tau: float = 0.3):
         r"""
         Get a batch of transitions to be used for bootstrapped updates.
         
@@ -228,7 +245,12 @@ class TrajectoryReplayBuffer(BaseReplayBuffer):
                                       weights=self._trajectory_weight,
                                       k=num_trajectory)
         self._random_state = random.getstate()
-        batch = list(chain.from_iterable(traj.sample(num_samples=sample_per_trajectory, k_steps=k_steps) 
+        batch = list(chain.from_iterable(traj.sample(current_training_step = current_training_step,
+                                                     max_training_steps = max_training_steps,
+                                                     num_samples=sample_per_trajectory, 
+                                                     k_steps=k_steps,
+                                                     tau = tau,
+                                                     ) 
                      for traj in trajectories
                      ))
         

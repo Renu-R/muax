@@ -47,6 +47,7 @@ def fit(model,
         temperature_fn=_temperature_fn,
         log_all_metrics=False,
         num_update_per_episode: int = 50,
+        off_policy_discount: float = 0.3,
         ):
   r"""  Fits the model on the given `env_id` environment.
         
@@ -148,7 +149,7 @@ def fit(model,
   while len(buffer) < buffer_warm_up:
     obs, info = env.reset()    
     tracer.reset()
-    trajectory = Trajectory()
+    trajectory = Trajectory(training_step= training_step)
     temperature = temperature_fn(max_training_steps=max_training_steps, training_steps=training_step)
     for t in range(env.spec.max_episode_steps):
       key, subkey = jax.random.split(key)
@@ -172,13 +173,13 @@ def fit(model,
     if len(trajectory) >= k_steps:
       buffer.add(trajectory, trajectory.batched_transitions.w.mean())
   
-  print('start training...')
+  print('start training...(OP)')
   env = TrainMonitor(env, tensorboard_dir=os.path.join(tensorboard_dir, name), log_all_metrics=log_all_metrics)
   
   for ep in range(max_episodes):
     obs, info = env.reset(seed=random_seed)   
     tracer.reset() 
-    trajectory = Trajectory()
+    trajectory = Trajectory(training_step= training_step)
     temperature = temperature_fn(max_training_steps=max_training_steps, training_steps=training_step)
     for t in range(env.spec.max_episode_steps):
       key, subkey = jax.random.split(key)
@@ -201,13 +202,18 @@ def fit(model,
       obs = obs_next 
     trajectory.finalize()
     if len(trajectory) >= k_steps:
+      #keep track of total steps so far so that 
       buffer.add(trajectory, trajectory.batched_transitions.w.mean())
 
     train_loss = 0
     for _ in range(num_update_per_episode):
-      transition_batch = buffer.sample(num_trajectory=num_trajectory,
-                                        sample_per_trajectory=sample_per_trajectory,
-                                        k_steps=k_steps)
+      transition_batch = buffer.sample(current_training_step=training_step,
+                                 max_training_steps=max_training_steps,
+                                 num_trajectory=num_trajectory,
+                                 sample_per_trajectory=sample_per_trajectory,
+                                 k_steps=k_steps,
+                                 tau=off_policy_discount)
+
       loss_metric = model.update(transition_batch)
       train_loss += loss_metric['loss']
       training_step += 1
