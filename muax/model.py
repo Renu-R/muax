@@ -312,6 +312,12 @@ class MuZero:
     
     return loss_metric
   
+  def infer_value(self, obs):
+    # s = self._repr_apply(self._params.representation, obs)
+    # v, logits = self._pred_apply(self._params.prediction, s)
+    root = self._root_inference(self.params, None, obs)
+    return root.value.item()
+  
   def save(self, file):
     """Saves model parameters and optimizer state to the file"""
     to_save = {'params': self.params, 'optimizer_state': self.optimizer_state}

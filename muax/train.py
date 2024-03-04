@@ -27,7 +27,7 @@ def fit(model,
         env_id: Optional[str] = None,
         env: Optional[gym.Env] = None,
         test_env: Optional[gym.Env] = None, 
-        tracer=PNStep(50, 0.997, 0.5), 
+        tracer=PNStep(35, 0.997, 0.5), 
         buffer=TrajectoryReplayBuffer(500),
         max_episodes: int = 1000, 
         test_interval: int = 10,
@@ -46,7 +46,7 @@ def fit(model,
         random_seed: int = 42,
         temperature_fn=_temperature_fn,
         log_all_metrics=False,
-        num_update_per_episode: int = 50,
+        num_update_per_episode: int = 20,
         off_policy_discount: float = 0.3,
         ):
   r"""  Fits the model on the given `env_id` environment.
@@ -147,7 +147,7 @@ def fit(model,
   # buffer warm up
   print('buffer warm up stage...')
   while len(buffer) < buffer_warm_up:
-    obs, info = env.reset()    
+    obs, info = env.reset()
     tracer.reset()
     trajectory = Trajectory(training_step= training_step)
     temperature = temperature_fn(max_training_steps=max_training_steps, training_steps=training_step)
@@ -160,20 +160,20 @@ def fit(model,
                            num_simulations=num_simulations,
                            temperature=temperature)
       obs_next, r, done, truncated, info = env.step(a)
-#       if truncated:
-#         r = 1 / (1 - tracer.gamma)
+      #       if truncated:
+      #         r = 1 / (1 - tracer.gamma)
       tracer.add(obs, a, r, done or truncated, v=v, pi=pi)
       while tracer:
         trans = tracer.pop()
         trajectory.add(trans)
       if done or truncated:
         break 
-      obs = obs_next 
+      obs = obs_next
     trajectory.finalize()
     if len(trajectory) >= k_steps:
       buffer.add(trajectory, trajectory.batched_transitions.w.mean())
   
-  print('start training...(OP)')
+  print('start training...(OPe)')
   env = TrainMonitor(env, tensorboard_dir=os.path.join(tensorboard_dir, name), log_all_metrics=log_all_metrics)
   
   for ep in range(max_episodes):
@@ -190,9 +190,10 @@ def fit(model,
                            num_simulations=num_simulations,
                            temperature=temperature)
       obs_next, r, done, truncated, info = env.step(a)
-#       if truncated:
-#         r = 1 / (1 - tracer.gamma)
+      #       if truncated:
+      #         r = 1 / (1 - tracer.gamma)
       tracer.add(obs, a, r, done or truncated, v=v, pi=pi)
+      rewards = tracer.get_rewards()
       while tracer:
         trans = tracer.pop()
         trajectory.add(trans)
@@ -212,8 +213,10 @@ def fit(model,
                                  num_trajectory=num_trajectory,
                                  sample_per_trajectory=sample_per_trajectory,
                                  k_steps=k_steps,
-                                 tau=off_policy_discount)
-
+                                 TD_configs = (tracer.n, tracer.gamma),
+                                 tau=off_policy_discount,
+                                 model = model)
+      
       loss_metric = model.update(transition_batch)
       train_loss += loss_metric['loss']
       training_step += 1

@@ -33,6 +33,7 @@ from itertools import islice
 import numpy as np 
 import jax
 from jax import numpy as jnp
+from jax import jit, vmap
 
 from muax.utils import sliceable_deque, n_step_bootstrapped_returns
 
@@ -54,6 +55,31 @@ class Transition:
 
     def __getitem__(self, index):
       return Transition(*(_attr[index] for _attr in self))
+    
+    def add_mask(self, mask_array):
+        assert(self.a.shape == mask_array.shape)
+        self.mask = mask_array
+
+    #@jit
+    def recompute_value_targets(self, td_depth, model, gamma):
+        L = self.r.shape[1]
+        gammas = np.power(gamma, np.arange(td_depth))
+        r = np.ravel(self.r)
+        Rn = []
+        for i in range(L):
+            rs = r[i:i+td_depth-1]
+            target_val = np.sum(gammas[:len(rs)] * rs).item()
+            if L-i > td_depth:
+                #use current model to get value at idx+td_depth
+                target_val += model.infer_value(self.obs[:, i+td_depth])
+            else:
+                target_val += 0
+            Rn.append(target_val)
+        Rn = np.expand_dims(np.array(Rn), axis=0)
+        return Transition(obs= self.obs, a = self.a, r = self.r, 
+                          done=self.done, Rn = Rn, v = self.v, pi=self.pi,
+                          w = self.w)
+
 
 def flatten_transition_func(transition: Transition) -> Tuple:
   return iter(transition), None 
@@ -157,6 +183,9 @@ class NStep(BaseTracer):
 
     def __bool__(self):
         return bool(len(self)) and (self._done or len(self) > self.n)
+    
+    def get_rewards(self):
+        return self._deque_r
 
     def pop(self):
         r"""

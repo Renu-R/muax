@@ -69,16 +69,17 @@ class Trajectory:
       batched_transitions = self.transition_class(*(np.expand_dims(_attr, axis=0)
           for _attr in batched_transitions))
       self._batched_transitions = batched_transitions
-
-    def get_max_idx(self, k_steps: int, current_training_step: int, max_training_steps: int, tau: float = 0.3): 
+    def get_max_depth(self, TD_steps: int, current_training_step: int, max_training_steps: int, tau: float = 0.3): 
        delta_td = (current_training_step - self.training_step)// (tau*max_training_steps)
-       max_idx = k_steps - delta_td
-       return int(np.clip(max_idx, 1, k_steps))
+       max_idx = TD_steps - delta_td
+       return int(np.clip(max_idx, 1, TD_steps))
     
-    def sample(self, current_training_step: int, 
+    def sample(self, model, 
+               TD_configs,
+               current_training_step: int, 
                max_training_steps: int,
                num_samples: int = 1,
-               k_steps: int = 5, 
+               k_steps: int = 5,
                tau: float = 0.3):
       """Samples consecutive transitions of k steps from the trajectory.
       
@@ -97,11 +98,11 @@ class Trajectory:
           L is the length(k) of the consecutive transitions.
       """
       if len(self) <= k_steps: return []
-      traj_depth = self.get_max_idx(k_steps=k_steps,
+      traj_depth = self.get_max_depth(TD_steps=TD_configs[0],
                                  current_training_step=current_training_step,
                                  max_training_steps=max_training_steps,
                                  tau=tau)
-      max_idx = len(self) - traj_depth
+      max_idx = len(self) - k_steps
       idxes = random.choices(range(max_idx), 
                             weights=self._transition_weight[:max_idx], 
                             k=num_samples)
@@ -109,7 +110,7 @@ class Trajectory:
       if self.batched_transitions is None:
         self.finalize()
 
-      samples = [self._get_sample(idx, traj_depth) for idx in idxes]
+      samples = [self._get_sample(idx, traj_depth, k_steps=k_steps, model=model, discount = TD_configs[1]) for idx in idxes]
       
       return samples
 
@@ -117,10 +118,21 @@ class Trajectory:
     def batched_transitions(self):
       return self._batched_transitions
 
-    def _get_sample(self, idx, traj_depth):
+    def _get_sample(self, idx, traj_depth, k_steps, model, discount):
       #need to use current step number relative to total steps
-      end_idx = idx + traj_depth 
+      end_idx = idx + k_steps
+    #   mask = np.arange(k_steps)
+    #   mask = np.where(mask<traj_depth,1,0)
+    #   mask = np.expand_dims(mask, axis=0)
+      sample = self.batched_transitions.recompute_value_targets(td_depth=traj_depth,
+                                                                model=model,
+                                                                gamma=discount)
       sample = self.batched_transitions[:, idx: end_idx]
+    #   sample.add_mask(mask)
+      #print("Rn= ",sample.Rn)
+
+      #recompute value targets
+      #sample.recompute_value_targets(td_depth=traj_depth, model=model, gamma = discount)
       return sample
 
     def __getitem__(self, index):
@@ -203,11 +215,12 @@ class TrajectoryReplayBuffer(BaseReplayBuffer):
         self._storage.append(trajectory)
         self._trajectory_weight.append(w)
 
-    def sample(self,
+    def sample(self, model,
                current_training_step: int,
                batch_size=32, 
                num_trajectory: int = None,
                k_steps: int = 5,
+               TD_configs: tuple[int, float] = (50, 0.997),
                sample_per_trajectory: int = 1,
                max_training_steps: int = 10000,
                tau: float = 0.3):
@@ -249,11 +262,12 @@ class TrajectoryReplayBuffer(BaseReplayBuffer):
                                                      max_training_steps = max_training_steps,
                                                      num_samples=sample_per_trajectory, 
                                                      k_steps=k_steps,
+                                                     TD_configs = TD_configs,
                                                      tau = tau,
+                                                     model = model,
                                                      ) 
                      for traj in trajectories
                      ))
-        
         batch = jax.tree_util.tree_transpose(
           outer_treedef=jax.tree_util.tree_structure([0 for i in batch]),
           inner_treedef=jax.tree_util.tree_structure(self.transition_class()),
